@@ -119,7 +119,7 @@ dig google.com
  
 - `resolvectl status` showed `192.168.1.254` as the DNS server for `wlp2s0`.
 - `dig google.com` returned several IPv4 addresses.
-- The server shown by `dig` was `127.0.0.53`, not the router.
+- `dig google.com` returned six IPv4 addresses, and the server that answered was `192.168.1.254#53` (the router).
 ### What was learned
  
 homelab01 sends its DNS questions straight to the router on port 53:
@@ -161,6 +161,7 @@ sudo apt install tcpdump dnsutils nmap
 - `dnsutils` provides `dig` and `nslookup`
 - `nmap` scans hosts and services
 - Wireshark (on the laptop) is used to read the captures in detail
+
 ---
  
 ## 5. Viewing the Neighbor Table
@@ -193,6 +194,7 @@ The state describes how recently Linux confirmed the device:
 - **REACHABLE:** recently confirmed
 - **STALE:** cached, but not confirmed recently
 - **DELAY:** about to be checked again
+
 **Screenshot 5**
  
 ![Screenshot 5](screenshots/05.png)
@@ -228,6 +230,7 @@ Five packets were captured:
 - **Why 0.0.0.0:** the client had just released its IP, so it had no address to send from.
 - **Why 255.255.255.255:** the client does not know where the DHCP server is, so it broadcasts to everyone on the local network. The Request is also broadcast so any other DHCP server knows which offer was accepted.
 - The settings in the Ack matched the output of `ip addr`, `ip route`, and `resolvectl status`, which confirms those settings come from DHCP.
+
 **Screenshot 6**
  
 ![Screenshot 6](screenshots/06.png)
@@ -270,11 +273,13 @@ ARP turns a local IPv4 address into a MAC address. A machine needs this before i
 - Requests are broadcast because the sender does not know which device has that IP.
 - Replies go straight back to whoever asked.
 - Flushing the table also removed the laptop's entry, so homelab01 had to look it up again to keep the SSH session going (packets 2 and 3).
+
 This connected:
  
 - **Layer 3:** IP addressing
 - **Layer 2:** MAC addressing
 - **ARP:** the mapping between the two
+
 **Screenshot 9**
  
 ![Screenshot 9](screenshots/09.png)
@@ -369,6 +374,7 @@ Pi-hole -> Laptop
 - DNS uses port 53.
 - A DNS request can pass through several servers before an answer comes back.
 - Pi-hole acts as a middleman: it answers the laptop and does the outside lookup itself. This is where DNS blocking and logging happen.
+
 **Screenshot 11**
  
 ![Screenshot 11](screenshots/11.png)
@@ -465,8 +471,21 @@ The ping from homelab01 succeeded with 0% packet loss. The replies showed `ttl=1
 Removed the rule afterward, since the laptop is on a shared network:
 
     Remove-NetFirewallRule -DisplayName "Allow ICMPv4 Ping"
+
 ---
- 
+
+### 10.5 Remote access with Tailscale
+
+I can't port forward on the shared router, so I set up Tailscale, a WireGuard-based VPN that only makes outbound connections.
+
+    curl -fsSL https://tailscale.com/install.sh | sh
+    sudo tailscale up
+    tailscale ip -4
+
+I tested it by connecting over SSH from my phone's hotspot.
+
+## 11. Break and Fix Tests
+
 ### Test 1: Wrong DNS server
 
 #### Break
@@ -505,57 +524,129 @@ Reverted to the original DNS configuration from DHCP:
 **Screenshot 14**
 
 ![Screenshot 14](screenshots/14.png) 
+
 ---
  
 ### Test 2: Wrong default gateway
- 
+
+> My first attempt at this test cut off my remote access. See the incident below. The results here are from a second run, done from home over the local network.
+
 #### Break
- 
+
+Replaced the real default gateway (192.168.1.254) with 192.168.1.250, an address with no device behind it:
+
 ```bash
 sudo ip route del default
 sudo ip route add default via 192.168.1.250 dev wlp2s0
 ```
- 
+
 #### Symptom
- 
-_To be added_
- 
+
+- `ping 192.168.1.254` (the router) still worked: 4 sent, 4 received, 0% packet loss.
+- `ping google.com` resolved the name to 142.250.139.139, but every ping failed with "From 192.168.1.78 Destination Host Unreachable" and 100% packet loss.
+
 #### Diagnosis
- 
-_To be added_
- 
+
+- The name still resolved because the DNS server (the router at 192.168.1.254) is on the local network, so DNS lookups don't need the gateway.
+- The "Destination Host Unreachable" message came from homelab01 itself (192.168.1.78), not from a router out on the internet. The packets never left the machine.
+- `ip neigh show 192.168.1.250` showed `FAILED`. homelab01 sent an ARP request asking "who has 192.168.1.250?" and no device answered.
+
+#### Root cause
+
+Local traffic is sent directly to the device using the `192.168.1.0/24` route, so it doesn't need the gateway. Traffic for any other network is sent to the default gateway. With the gateway set to 192.168.1.250, homelab01 couldn't find a MAC address for it, so every packet headed outside the local network was dropped before it left the machine.
+
 #### Fix
- 
+
+Put the real gateway back:
+
 ```bash
 sudo ip route del default
 sudo ip route add default via 192.168.1.254 dev wlp2s0
 ```
- 
 #### Verified
- 
-_To be added_
- 
+
+- `ip route` showed `default via 192.168.1.254` again.
+- `ping google.com` worked.
+
 **Screenshot 15**
- 
+
 ![Screenshot 15](screenshots/15.png)
- 
+
+#### Comparison with Test 1
+
+- Test 1 (wrong DNS): IPs worked, names failed.
+- Test 2 (wrong gateway): names worked, the internet failed.
+
+The symptoms alone show whether the problem is DNS or routing.
+
 ---
- 
+
+### Incident during Test 2: Lost remote access
+
+#### What happened
+
+On my first attempt at Test 2, I changed the default gateway to 192.168.1.250 while connected to homelab01 over SSH through Tailscale from outside the house. The SSH session dropped right away and I couldn't reconnect. I had no way to fix it until I got home about 12 hours later.
+
+#### Root cause
+
+Tailscale needs to reach the internet to connect my laptop to homelab01 from another network, and all internet traffic leaves through the default gateway. With a fake gateway, nothing could get out, so the VPN connection and my SSH session inside it died.
+
+I broke the same path I was using to manage the server.
+
+#### Impact
+
+- No remote access to homelab01 for about 12 hours
+- No permanent damage: the route change only lived in memory, so a reboot or a DHCP renewal restores the real gateway
+
+#### Fix
+
+When I got home, I connected my laptop to the same Wi-Fi network as homelab01 and connected over SSH using its local IP instead of Tailscale:
+
+```powershell
+ssh abenezerbrh@192.168.1.78
+```
+
+This worked because my laptop and homelab01 were on the same local network, so the connection didn't need the default gateway.
+
+Then I put the real gateway back:
+
+```bash
+sudo ip route del default
+sudo ip route add default via 192.168.1.254 dev wlp2s0
+```
+
+With the gateway restored, I reran Test 2 from the local network (results above).
+
+#### Lessons learned
+
+- Know which path you're managing a device through before you change it.
+- Run routing tests over the local network (SSH to 192.168.1.78), not over a VPN.
+- For risky remote changes, schedule an automatic rollback first, so it undoes itself if access is lost:
+
+```bash
+sudo systemd-run --on-active=5min ip route replace default via 192.168.1.254 dev wlp2s0
+```
+
+---
+
 ## 12. Key Concepts Learned
- 
+
 - IPv4 addressing and CIDR notation
 - Subnet and broadcast addresses
-- Default gateways and routing tables
+- Default gateways as the first hop, and routing tables
 - DHCP (Release, Discover, Offer, Request, Ack)
-- DNS resolution, local stub resolvers, and upstream DNS
-- DNS forwarding with Pi-hole
-- ARP and the neighbor table
+- DNS resolution and upstream DNS servers
+- DNS forwarding and caching with Pi-hole
+- ARP, the neighbor table, and MAC vendor lookup (OUI)
 - Layer 2 vs Layer 3
-- ICMP and host firewalls
-- Packet capture with tcpdump
-- Packet analysis with Wireshark
+- ICMP, TTL, and host firewall rules
+- Packet capture with tcpdump and analysis in Wireshark
+- Telling DNS problems from routing problems by their symptoms
+- Remote access with a VPN (Tailscale) when port forwarding isn't an option
+- Change safety: knowing your management path before making remote changes
 - Time sync and why it matters
 - Troubleshooting methodology: symptom, diagnosis, root cause, fix, verification
+
 ---
  
 ## 13. Commands Reference
@@ -588,15 +679,18 @@ arp -a
 ---
  
 ## 14. Project Outcome
- 
+
 By the end of the project, I could use the homelab to:
- 
-- Identify its network configuration
-- Explain how local routing and the default gateway work
+
+- Identify its network configuration and explain where each setting comes from
 - Capture and explain a full DHCP exchange
 - Map IP addresses to MAC addresses with ARP
-- Trace DNS lookups through a local resolver, Pi-hole, and upstream DNS
+- Trace DNS lookups from homelab01 to the router, and from my laptop through Pi-hole to Cloudflare
 - Tell the difference between "unreachable" and "not answering ping"
+- Break DNS and the default gateway on purpose and diagnose each from the symptoms
 - Capture packets remotely and analyze them in Wireshark
+- Reach homelab01 from anywhere using Tailscale
+- Check each network layer quickly with a PowerShell triage script
 - Document problems using symptom, cause, fix, and verification
+
 The most important result was moving from running commands to understanding what each packet and network service was actually doing.
