@@ -1,0 +1,62 @@
+# Project 2 - Small routed network
+#
+# host1 --- r1 --- r2 --- r3 --- host2
+#            \_____________/
+#             backup link
+#
+# Routers only get IP addresses here. Static routes are added by hand.
+
+name: routed
+
+topology:
+  defaults:
+    kind: linux
+    image: nicolaka/netshoot:v0.13
+
+  nodes:
+    r1:
+      sysctls:
+        net.ipv4.ip_forward: "1"
+      exec:
+        - ip addr add 10.1.1.1/24 dev eth1     # host1 LAN
+        - ip addr add 10.0.12.1/30 dev eth2    # link to r2
+        - ip addr add 10.0.13.1/30 dev eth3    # backup link to r3
+        - ip route del default                 # remove Docker's management route
+        - ip route add 10.3.3.0/24 via 10.0.12.2  
+
+    r2:
+      sysctls:
+        net.ipv4.ip_forward: "1"
+      exec:
+        - ip addr add 10.0.12.2/30 dev eth1    # link to r1
+        - ip addr add 10.0.23.1/30 dev eth2    # link to r3
+        - ip route del default
+        - ip route add 10.3.3.0/24 via 10.0.23.2
+        - ip route add 10.1.1.0/24 via 10.0.12.1
+
+    r3:
+      sysctls:
+        net.ipv4.ip_forward: "1"
+      exec:
+        - ip addr add 10.0.23.2/30 dev eth1    # link to r2
+        - ip addr add 10.0.13.2/30 dev eth2    # backup link to r1
+        - ip addr add 10.3.3.1/24 dev eth3     # host2 LAN
+        - ip route del default
+        - ip route add 10.1.1.0/24 via 10.0.23.1
+
+    host1:
+      exec:
+        - ip addr add 10.1.1.10/24 dev eth1
+        - ip route replace default via 10.1.1.1 dev eth1
+
+    host2:
+      exec:
+        - ip addr add 10.3.3.10/24 dev eth1
+        - ip route replace default via 10.3.3.1 dev eth1
+
+  links:
+    - endpoints: ["host1:eth1", "r1:eth1"]
+    - endpoints: ["r1:eth2", "r2:eth1"]
+    - endpoints: ["r2:eth2", "r3:eth1"]
+    - endpoints: ["r1:eth3", "r3:eth2"]
+    - endpoints: ["r3:eth3", "host2:eth1"]
