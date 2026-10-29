@@ -11,7 +11,7 @@ I'm a Software Engineering student learning networking by building, capturing, a
 | # | Project | Focus | Status |
 |---|---|---|---|
 | 1 | [Network Discovery & Documentation](01-network-discovery/) | IP addressing, DHCP, ARP, DNS, packet capture, break/fix testing | Complete |
-| 2 | Build a Small Routed Network | Routing, static routes, failure testing | Planned |
+| 2 | Build a Small Routed Network | Routing, static routes, failure testing | In Progress |
 | 3 | Homelab DNS + DHCP Server | Pi-hole, DHCP, internal records, logging | Planned |
 | 4 | VLAN Segmented Network | 802.1Q VLANs, trunks, inter-VLAN routing, ACLs | Planned |
 | 5 | Network Monitoring System | SNMP, Prometheus, Grafana | Planned |

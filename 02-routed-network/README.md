@@ -315,7 +315,199 @@ After rebuilding, pings worked in both directions.
 
 ## 9. Break and Fix Tests
 
-_To be added_
+### Test 1: Missing return route
+
+#### Break
+
+Removed r2's route back to host1's network:
+
+```bash
+sudo docker exec clab-routed-r2 ip route del 10.1.1.0/24 via 10.0.12.1
+```
+
+#### Symptom
+
+- Before the change, host1 could ping host2 (2 sent, 2 received).
+- After the change, the same ping failed with 100% packet loss, and no error message appeared on host1.
+
+**Screenshot 7**
+
+![Screenshot 7](screenshots/07.png)
+
+#### Diagnosis
+
+I ran `tcpdump` on host2's `eth1` while pinging from host1:
+
+- **Echo requests** from 10.1.1.10 still arrived at host2, so the path forward was fine.
+- host2 sent an **echo reply** for every request.
+- Right after, r2 (10.0.23.1, its side of the r2 to r3 link) sent host2 an ICMP message: **"net 10.1.1.10 unreachable."**
+
+The capture also shows the difference before and after the change: the first ping's replies went through normally, and the second ping's reply triggered the unreachable error.
+
+**Screenshot 8**
+
+![Screenshot 8](screenshots/08.png)
+
+#### Root cause
+
+The reply from host2 traveled to r3, then to r2. r2 no longer had a route to 10.1.1.0/24, so it dropped the reply and sent an error back to the reply's sender, host2. host1 never got a reply, and never got an error either, because the error went to host2 instead.
+
+Only one unreachable message appeared even though every reply was dropped. Linux rate-limits ICMP error messages so a router doesn't flood the network with them.
+
+#### Fix
+
+```bash
+sudo docker exec clab-routed-r2 ip route add 10.1.1.0/24 via 10.0.12.1
+```
+
+#### Verified
+
+I restored r2's route back to host1's network through r1 (via 10.0.12.1). After that, pinging host2 from host1 worked again.
+
+### Test 2: Wrong default gateway on a host
+
+#### Break
+
+Changed host1's default gateway from 10.1.1.1 (r1's `eth1`) to 10.1.1.5, an address with no device behind it:
+
+```bash
+sudo docker exec clab-routed-host1 ip route replace default via 10.1.1.5
+```
+
+#### Symptom
+
+Pinging host2 from host1 failed with **"From 10.1.1.10 Destination Host Unreachable"** and 100% packet loss.
+
+#### Diagnosis
+
+- The error came from **10.1.1.10, host1 itself**, not from a router. The packets never left host1.
+- `ip neigh` on host1 showed `10.1.1.5 dev eth1 FAILED`. host1 sent an ARP request asking "who has 10.1.1.5?" and no device answered.
+
+#### Root cause
+
+host2 is on a different network, so host1 has to send the packet to its default gateway first. To do that, it needs the gateway's MAC address. With the gateway set to 10.1.1.5, ARP got no answer, so host1 had nowhere to send the packet and dropped it.
+
+This matches the wrong gateway test in Project 1: "Destination Host Unreachable" from your own machine plus a FAILED ARP entry means the gateway can't be found.
+
+#### Fix
+
+```bash
+sudo docker exec clab-routed-host1 ip route replace default via 10.1.1.1
+```
+
+#### Verified
+
+Pinging host2 from host1 worked again, with `ttl=61` and 0% packet loss.
+
+The FAILED entry for 10.1.1.5 stayed in `ip neigh` for a while after the fix. The neighbor table is a separate cache, and old entries are only cleaned up after a timeout. It didn't affect traffic.
+
+**Screenshot 9**
+
+![Screenshot 9](screenshots/09.png)
+
+### Test 3: Link down
+
+#### Break
+
+Took down r2's `eth2`, the link to r3:
+
+```bash
+sudo docker exec clab-routed-r2 ip link set eth2 down
+```
+
+#### Symptom
+
+- Before the change, host1 could ping host2.
+- After the change, the ping failed with **"From 10.0.12.2 Destination Net Unreachable."**
+
+#### Diagnosis
+
+- The error came from **10.0.12.2, r2's `eth1`** (its side of the r1 to r2 link). Routers reply from the interface the packet came in on.
+- `ip route` on r2 showed that two routes were gone:
+  - `10.0.23.0/30` (the directly connected r2 to r3 network)
+  - `10.3.3.0/24 via 10.0.23.2` (the static route to host2's network)
+
+**Screenshot 10**
+
+![Screenshot 10](screenshots/10.png)
+
+#### Root cause
+
+When the link went down, Linux removed the connected route for that link, and with it every route using a next hop on that link. r2 no longer had any route to 10.3.3.0/24, so it dropped the packets and sent "Net Unreachable" back to host1.
+
+#### Fix
+
+Brought the link back up:
+
+```bash
+sudo docker exec clab-routed-r2 ip link set eth2 up
+```
+
+The connected route (`10.0.23.0/30`) came back on its own, but the static route did not, and the ping still failed. I had to add the static route again:
+
+```bash
+sudo docker exec clab-routed-r2 ip route add 10.3.3.0/24 via 10.0.23.2
+```
+
+#### Verified
+
+`ip route` on r2 showed both routes again, and pinging host2 from host1 worked with `ttl=61`.
+
+**Screenshot 11**
+
+![Screenshot 11](screenshots/11.png)
+
+#### What I learned
+
+Linux restores connected routes automatically when a link comes back, but not static routes added by hand. Real routers keep static routes in their saved configuration and reinstall them when the link returns.
+
+### Test 4: Routing loop
+
+#### Break
+
+Changed r2's route to host2's network so it pointed back at r1 instead of forward to r3:
+
+```bash
+sudo docker exec clab-routed-r2 ip route del 10.3.3.0/24 via 10.0.23.2
+sudo docker exec clab-routed-r2 ip route add 10.3.3.0/24 via 10.0.12.1
+```
+
+#### Symptom
+
+Pinging host2 from host1 failed with **"From 10.0.12.2 Time to live exceeded"** and 100% packet loss.
+
+**Screenshot 12**
+
+![Screenshot 12](screenshots/12.png)
+
+#### Diagnosis
+
+- r1 sends traffic for 10.3.3.0/24 to r2, and r2 now sends it straight back to r1. The packet bounces between the two routers.
+- A traceroute to host2 showed r1 and r2 repeating over and over until it hit traceroute's 30-hop limit.
+- The error came from r2 (10.0.12.2). host1 sends with a TTL of 64, and each router subtracts 1, alternating r1 and r2. The 64th hop lands on r2, so r2 is the one that dropped the packet and reported it.
+
+#### Root cause
+
+r2's route pointed back toward the router the traffic came from, creating a loop. Without TTL, the packets would circle forever. TTL is what eventually stops them.
+
+#### Fix
+
+Pointed r2's route back at r3:
+
+```bash
+sudo docker exec clab-routed-r2 ip route del 10.3.3.0/24 via 10.0.12.1
+sudo docker exec clab-routed-r2 ip route add 10.3.3.0/24 via 10.0.23.2
+```
+
+Linux won't add a second route to the same network, so the old route had to be deleted first. `ip route replace` does both in one step.
+
+#### Verified
+
+`ip route` on r2 showed `10.3.3.0/24 via 10.0.23.2` again, and pinging host2 from host1 worked with `ttl=61`.
+
+**Screenshot 13**
+
+![Screenshot 13](screenshots/13.png)
 
 ---
 
