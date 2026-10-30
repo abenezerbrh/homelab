@@ -509,6 +509,85 @@ Linux won't add a second route to the same network, so the old route had to be d
 
 ![Screenshot 13](screenshots/13.png)
 
+### Test 5: Asymmetric routing
+
+#### Change
+
+Pointed r1's route to host2's network over the backup link, directly to r3, instead of through r2. All other routes stayed the same, so replies still return through r2.
+
+```bash
+sudo docker exec clab-routed-r1 ip route del 10.3.3.0/24 via 10.0.12.2
+sudo docker exec clab-routed-r1 ip route add 10.3.3.0/24 via 10.0.13.2
+```
+
+#### Result
+
+`ip route` on r1 confirmed the new route (`10.3.3.0/24 via 10.0.13.2 dev eth3`), and pinging host2 from host1 still worked with `ttl=61`.
+
+**Screenshot 14**
+
+![Screenshot 14](screenshots/14.png)
+
+#### Tracing the two paths
+
+| Direction | Path | Hops |
+|---|---|---|
+| host1 → host2 | host1 → r1 → r3 → host2 (backup link) | 3 |
+| host2 → host1 | host2 → r3 → r2 → r1 → host1 | 4 |
+
+The different hop counts show the traffic takes a different path in each direction.
+
+**Screenshot 15**
+
+![Screenshot 15](screenshots/15.png)
+
+At first the traceroute output was confusing. r3 showed up as `10.0.23.2` (its r2-facing interface), even though the traffic arrived on the backup link, and r1 showed up as `10.0.13.1` on the return trip. Traceroute shows **which router answered**, not which interface the packet used. Linux sends its reply from the interface it would use to reach the sender, which isn't always the one the packet came in on.
+
+#### Confirming with tcpdump
+
+To see the actual path, I ran `tcpdump` on individual router interfaces while sending traffic:
+
+| Capture point | Traffic seen | Meaning |
+|---|---|---|
+| r1 `eth3` (backup link) | host1 → host2 only (a UDP traceroute probe) | Requests leave r1 over the backup link |
+| r3 `eth2` (backup link) | ICMP echo request, host1 → host2 | Requests arrive at r3 over the backup link |
+| r3 `eth1` (link to r2) | ICMP echo reply, host2 → host1 | Replies leave r3 toward r2 |
+
+Requests only crossed the backup link, and replies only went through r2.
+
+**Screenshot 16**
+
+![Screenshot 16](screenshots/16.png)
+
+#### What I learned
+
+- Each router decides independently where to send each packet, so the request and reply don't have to take the same path.
+- Asymmetric routing works fine for simple traffic, but it can cause problems for devices that need to see both directions, like stateful firewalls.
+- Traceroute shows which routers answered, but tcpdump on specific interfaces shows the path the packets actually took.
+
+#### Fix
+
+```bash
+sudo docker exec clab-routed-r1 ip route del 10.3.3.0/24 via 10.0.13.2
+sudo docker exec clab-routed-r1 ip route add 10.3.3.0/24 via 10.0.12.2
+```
+
+#### Verified
+
+After restoring r1's route through r2, `tcpdump` on r3's `eth1` showed both the echo request and the echo reply for each ping, confirming that traffic in both directions goes through r2 again.
+
+### Problem: tcpdump only showed half the traffic
+
+#### Cause
+
+Running tcpdump through `docker exec` without a terminal makes it buffer its output, so some packets weren't printed before I stopped it. Ctrl+C also didn't stop tcpdump inside the container, so captures kept running in the background.
+
+#### Fix
+
+Used `-l` for line-by-line output and `-it` so Ctrl+C reaches the container:
+
+    sudo docker exec -it clab-routed-r3 tcpdump -lni eth1 icmp
+
 ---
 
 ## 10. Key Concepts Learned
