@@ -29,14 +29,8 @@ The entire lab runs inside homelab01 as containers. It is isolated from my home 
 
 ## Topology
 
-```mermaid
-flowchart LR
-    H1["host1<br/>10.1.1.10/24"] --- R1
-    R1["r1"] ---|10.0.12.0/30| R2["r2"]
-    R2 ---|10.0.23.0/30| R3["r3"]
-    R3 --- H2["host2<br/>10.3.3.10/24"]
-    R1 -.-|backup link<br/>10.0.13.0/30| R3
-```
+![Project 2 topology](diagrams/02-diagram.svg)
+
 
 ### Addressing
 
@@ -127,19 +121,14 @@ Containerlab keeps a separate **management network** (`172.20.20.0/24`) for reac
 ### Commands
 
 ```bash
-sudo docker exec clab-routed-r1 ip route
-```
-
-```bash
-sudo docker exec clab-routed-host1 ping -c 2 10.1.1.1
+sudo docker exec clab-routed-host2 ping -c 2 10.1.1.10
 sudo docker exec clab-routed-host1 ping -c 2 10.3.3.10
 ```
 
 ### Observations
 
-- r1's routing table only listed its directly connected networks.
-- host1 could ping r1 (same network).
-- host1 could not ping host2. r1 replied with "Destination Net Unreachable."
+- host2 could not ping host1. r3 (10.3.3.1) replied with "Destination Net Unreachable."
+- host1 could not ping host2. r1 (10.1.1.1) replied with "Destination Net Unreachable."
 
 ### What was learned
 
@@ -588,6 +577,94 @@ Used `-l` for line-by-line output and `-it` so Ctrl+C reaches the container:
 
     sudo docker exec -it clab-routed-r3 tcpdump -lni eth1 icmp
 
+### Test 6: Failover with a floating static route
+
+#### Change
+
+Added backup routes over the r1 to r3 link, with a metric of 100. Linux always prefers the route with the lowest metric, and the main routes have no metric (0), so the backups are only used if the main routes disappear. This is called a **floating static route**.
+
+```bash
+sudo docker exec clab-routed-r1 ip route add 10.3.3.0/24 via 10.0.13.2 metric 100
+sudo docker exec clab-routed-r3 ip route add 10.1.1.0/24 via 10.0.13.1 metric 100
+```
+
+`ip route` on r1 and r3 showed two routes to each network: the main one, and the backup marked `metric 100`. A traceroute from host1 to host2 still went r1 → r2 → r3, so the main path was still in use.
+
+#### Break 1: r1 to r2 link down
+
+Took down both ends of the r1 to r2 link to simulate a cable being unplugged:
+
+```bash
+sudo docker exec clab-routed-r1 ip link set eth2 down
+sudo docker exec clab-routed-r2 ip link set eth1 down
+```
+
+#### Prediction
+
+Requests from host1 would fail over to the backup link, but replies would not, because r3 has no way of knowing the r1 to r2 link failed.
+
+#### Symptom
+
+Pinging host2 from host1 failed with 100% packet loss.
+
+**Screenshot 17**
+
+![Screenshot 17](screenshots/17.png)
+
+#### Diagnosis
+
+- **r1 failed over:** its main route disappeared when `eth2` went down, and the backup `10.3.3.0/24 via 10.0.13.2 metric 100` took over.
+- **r3 did not:** all of r3's links were still up, so its main route to 10.1.1.0/24 through r2 stayed in place.
+- The traceroute from host1 only got an answer from r1, then `* * *`. The probes reached r3 over the backup link, but r3 sent its replies toward r2, and r2 had no route back to host1 with its link to r1 down.
+
+#### Root cause
+
+A static route only reacts to a router's **own** links. r1 saw its link go down and switched to the backup. r3 couldn't see a failure two hops away, so it kept sending return traffic into the broken path.
+
+#### Break 2: r2 to r3 link down as well
+
+To simulate r3 detecting the failure, I also took down r3's `eth1`, its link to r2:
+
+```bash
+sudo docker exec clab-routed-r3 ip link set eth1 down
+```
+
+r3's main route was removed, its backup took over, and the ping worked in both directions with `ttl=62`. A traceroute showed the backup path: r1 (10.1.1.1) → r3 (10.0.13.2) → host2 (10.3.3.10).
+
+The TTL went from 61 to 62 because the backup path only crosses 2 routers instead of 3.
+
+**Screenshot 18**
+
+![Screenshot 18](screenshots/18.png)
+
+#### Fix
+
+Brought all three interfaces back up, then added back the main static routes that were removed when the links went down:
+
+- r1: `10.3.3.0/24 via 10.0.12.2`
+- r3: `10.1.1.0/24 via 10.0.23.1`
+- r2: `10.1.1.0/24 via 10.0.12.1`
+
+At first I only restored r1 and r3, and the traceroute still failed. r2 had also lost its route back to host1, since its `eth1` had been taken down too. After adding it back, everything worked.
+
+r2's route to 10.3.3.0/24 survived, because its `eth2` stayed up. Only the far end of that link (r3's `eth1`) went down. Linux removes routes when a router's own interface goes down, not when the other end does.
+
+An interface is **administratively down** when someone turns it off on purpose (like `ip link set eth2 down`), as opposed to going down because the other end or the cable failed (Operationally down).
+
+#### Verified
+
+host1 and host2 could ping each other in both directions with `ttl=61`, back on the original path through r2.
+
+#### What I learned
+
+- A floating static route can provide automatic failover, but only for failures on a router's own links.
+- Failover has to happen on **both sides** of a connection. If only one router switches, the return traffic still breaks.
+- In a real network, a dynamic routing protocol like OSPF would let r3 learn about the failure automatically.
+
+#### Mirror case: r2 to r3 link down
+
+If only the r2 to r3 link fails, the roles flip. r3 sees its own link go down and switches to the backup, but r1 doesn't, so it keeps sending traffic to r2, which has no route to host2 and drops it. Either way, static routes can only react to failures on a router's own links.
+
 ---
 
 ## 10. Key Concepts Learned
@@ -597,12 +674,17 @@ Used `-l` for line-by-line output and `-it` so Ctrl+C reaches the container:
 - Why router links use /30 subnets
 - IP forwarding on Linux
 - Routing has to work in both directions
-- TTL as a hop counter
-- "Destination Net Unreachable" vs "Destination Host Unreachable"
+- TTL as a hop counter, and how it stops routing loops
+- "Destination Net Unreachable" vs "Destination Host Unreachable," and who sends each
+- ICMP error rate limiting
+- What happens to routes when a link goes down
+- Administratively down vs operationally down
+- Route metrics and floating static routes
+- Asymmetric routing
+- Why traceroute shows which router answered, not always the interface the packet used
+- The limits of static routing, and why dynamic protocols like OSPF exist
 - Management network vs data network
 - Infrastructure as code: defining a network in a file
-
-_More to be added_
 
 ---
 
@@ -611,19 +693,45 @@ _More to be added_
 **On homelab01:**
 
 ```bash
+# Lab
 sudo containerlab deploy -t topology.clab.yml
 sudo containerlab deploy -t topology.clab.yml --reconfigure
 sudo containerlab destroy -t topology.clab.yml
+
+# Interfaces and addresses
 sudo docker exec clab-routed-<node> ip -br -4 addr
+sudo docker exec clab-routed-<node> ip link set <interface> down
+sudo docker exec clab-routed-<node> ip link set <interface> up
+sudo docker exec clab-routed-<node> ip neigh
+
+# Routing
 sudo docker exec clab-routed-<node> ip route
 sudo docker exec clab-routed-<node> ip route add <network> via <next-hop>
-sudo docker exec clab-routed-<node> ip route del <network>
+sudo docker exec clab-routed-<node> ip route add <network> via <next-hop> metric 100
+sudo docker exec clab-routed-<node> ip route replace <network> via <next-hop>
+sudo docker exec clab-routed-<node> ip route del <network> via <next-hop>
+
+# Testing
 sudo docker exec clab-routed-<node> ping -c 2 <ip>
 sudo docker exec clab-routed-<node> traceroute -n <ip>
+sudo docker exec -it clab-routed-<node> tcpdump -lni <interface> icmp
+
+# Cleanup
+sudo docker exec clab-routed-<node> pkill ping
+sudo docker exec clab-routed-<node> pkill tcpdump
 ```
 
 ---
 
 ## 12. Project Outcome
 
-_To be added_
+By the end of the project, I could:
+
+- Build a multi-router network from a single topology file and rebuild it the same way every time
+- Plan addressing for host networks and point-to-point router links
+- Configure static routes so traffic flows correctly in both directions
+- Trace a packet's path with traceroute, and confirm the real path with tcpdump on individual interfaces
+- Diagnose missing routes, wrong gateways, failed links, and routing loops from their symptoms
+- Set up floating static routes for automatic failover, and explain where that failover breaks down
+
+The most important lesson came from the failover tests. A static route only reacts to failures on a router's own links. When the r1 to r2 link failed, r1 switched to the backup path, but r3 couldn't see the failure and kept sending replies into the broken path. Failover had to happen on both sides for traffic to recover, and in a real network that's exactly the problem dynamic routing protocols solve.
