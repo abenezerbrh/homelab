@@ -203,9 +203,37 @@ nslookup github.com 192.168.1.78
 
 ## 8. Watching Recursive Resolution
 
-_To be added_
+### Commands
 
----
+```bash
+sudo systemctl restart unbound
+sudo tcpdump -i wlp2s0 -nn -w recursion.pcap port 53 and not host 192.168.1.254 and not host 192.168.1.86
+dig wikipedia.org @127.0.0.1 -p 5335
+```
+
+Restarting Unbound cleared its cache, so the lookup had to start from the root servers. The capture filter left out homelab01's own lookups to the router and my laptop's queries to Pi-hole.
+
+### Observations
+
+| Packets | Asked | Question | Reply |
+|---|---|---|---|
+| 1–2 | Root server (m.root-servers.net) | Who are the root servers? | List of all root servers (priming) |
+| 3–4 | Root server (e.root-servers.net) | `org` | Referral to the `.org` servers |
+| 5–6 | `.org` server | `wikipedia.org` | Referral to `ns0`/`ns1`/`ns2.wikimedia.org`, with glue IPs |
+| 7–8 | ns0.wikimedia.org | `wikipedia.org` | Final answer: `208.80.153.224` |
+| 9+ | Root and `.org` servers | `DNSKEY` | Signing keys for DNSSEC validation |
+
+**Screenshot 7**
+
+![Screenshot 7](screenshots/07.png)
+
+### What was learned
+
+- **Each level only knows the next step.** The root servers don't know Wikipedia's IP. They point to `.org`, which points to Wikipedia's own servers, which give the answer.
+- **QNAME minimisation:** Unbound only asked the root about `org`, not the full name, so each server learns only what it needs to.
+- **Glue records:** the `.org` referral included the IP of Wikipedia's name servers, so Unbound didn't need a separate lookup to find them.
+- **DNSSEC:** Unbound fetched the root and `.org` signing keys. The `.org` reply included signed proof (`NSEC3`) that wikipedia.org isn't DNSSEC-signed, so Unbound could confirm the answer was legitimately unsigned rather than tampered with.
+- **The `_ta-` query** returned "no such name" on purpose. It tells root server operators which DNSSEC root key the resolver trusts.
 
 ## 9. Local DNS Records
 
