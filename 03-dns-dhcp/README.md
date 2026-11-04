@@ -237,7 +237,83 @@ Restarting Unbound cleared its cache, so the lookup had to start from the root s
 
 ## 9. Local DNS Records
 
-_To be added_
+I added local DNS records in Pi-hole so I can reach devices by name instead of by IP address.
+
+I used the `.home.arpa` ending because it's officially reserved for home networks, so it will never clash with a real website. Made-up endings like `.lab` could become real domains someday, and `.local` is used by mDNS, which can cause conflicts.
+
+### Records added
+
+Added under **Settings → Local DNS Records** in the Pi-hole admin page:
+
+| Type | Name | Points to |
+|---|---|---|
+| DNS (A) | `homelab01.home.arpa` | `192.168.1.78` |
+| CNAME | `pihole.home.arpa` | `homelab01.home.arpa` |
+
+The CNAME is an alias: `pihole.home.arpa` is another name for homelab01. If homelab01's IP changes, only the A record needs updating.
+
+**Screenshot 8**
+
+![Screenshot 8](screenshots/08.png)
+
+### Testing from the laptop
+
+```powershell
+nslookup homelab01.home.arpa
+nslookup pihole.home.arpa
+ssh abenezerbrh@homelab01.home.arpa
+```
+
+#### Observations
+
+- At first, both lookups failed with "Non-existent domain," and SSH said "Could not resolve hostname." The server in the output was `Telus` (192.168.1.254), the router, which has never heard of my local names.
+- My laptop's DNS was set to automatic on this network, so it used the router from DHCP. I had set Pi-hole as the DNS server before, but Windows 11 saves DNS settings per Wi-Fi network, and that setting was for a different network.
+- After setting this network's DNS to Pi-hole (192.168.1.78) manually, `nslookup pihole.home.arpa` returned `homelab01.home.arpa` at 192.168.1.78, with `pihole.home.arpa` listed as an alias. The CNAME worked.
+
+### Problem: Local DNS names didn't resolve on the laptop
+
+#### Cause
+
+The laptop was asking the router for DNS, not Pi-hole. Its DNS setting for this Wi-Fi network was automatic, so it used the router handed out by DHCP. Local records only exist in Pi-hole, so the router replied that the names didn't exist.
+
+#### Fix
+
+Set the laptop's DNS for this network to Pi-hole (192.168.1.78) manually.
+
+#### Verified
+
+`nslookup` showed `Server: pi.hole`, and the local names resolved to 192.168.1.78.
+
+**Screenshot 9**
+
+![Screenshot 9](screenshots/09.png)
+
+### Testing from homelab01
+
+```bash
+dig homelab01.home.arpa
+dig homelab01.home.arpa @127.0.0.1
+```
+
+#### Prediction
+
+The first lookup would fail, because homelab01 uses the router for its own DNS, and the router doesn't know about my local records. The second would work, because it asks Pi-hole directly.
+
+#### Observations
+
+- `dig homelab01.home.arpa` was answered by the router (192.168.1.254) with `status: NXDOMAIN`, meaning the name doesn't exist as far as the router knows.
+- `dig homelab01.home.arpa @127.0.0.1` was answered by Pi-hole with `status: NOERROR` and the address 192.168.1.78.
+- Pi-hole's reply had the `aa` (authoritative) flag, since the record lives in Pi-hole itself, and a TTL of 0, so clients don't cache local records and see changes right away.
+
+**Screenshot 10**
+
+![Screenshot 10](screenshots/10.png)
+
+### What was learned
+
+- Local DNS records only work for devices that actually ask Pi-hole. The router has no idea they exist.
+- homelab01 can't see its own local name by default, because it uses the router for DNS. That's the tradeoff of keeping it independent from Pi-hole for safety.
+- `dig`'s `SERVER` line shows which DNS server answered, which is the first thing to check when a name doesn't resolve.
 
 ---
 
