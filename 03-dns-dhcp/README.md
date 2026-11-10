@@ -319,6 +319,52 @@ The first lookup would fail, because homelab01 uses the router for its own DNS, 
 
 ## 10. Query Logging and Blocking
 
+### Watching queries
+
+```bash
+pihole -t
+```
+
+#### Observations
+
+_To be added_
+
+**Screenshot 11**
+
+![Screenshot 11](screenshots/11.png)
+
+### Blocking from a blocklist
+
+```bash
+pihole -q doubleclick.net
+```
+
+```powershell
+nslookup doubleclick.net
+```
+
+#### Observations
+
+_To be added_
+
+**Screenshot 12**
+
+![Screenshot 12](screenshots/12.png)
+
+### Blocking a domain manually
+
+Added `example.com` as a deny entry under **Domains**, tested it, then removed it.
+
+#### Observations
+
+_To be added_
+
+**Screenshot 13**
+
+![Screenshot 13](screenshots/13.png)
+
+### What was learned
+
 _To be added_
 
 ---
