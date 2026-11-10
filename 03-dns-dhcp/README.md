@@ -327,7 +327,9 @@ pihole -t
 
 #### Observations
 
-_To be added_
+- With my laptop away from home, the log was quiet. The only regular entries were hourly `PTR` lookups for `1.0.0.127.in-addr.arpa`.
+- A PTR record is a reverse lookup: it turns an IP into a name, the opposite of an A record. Pi-hole does this every hour to keep client names up to date, and answered from `/etc/hosts` with `localhost`.
+- `query[TXT] local.api.ftl` entries are internal checks from Pi-hole's web interface.
 
 **Screenshot 11**
 
@@ -345,7 +347,9 @@ nslookup doubleclick.net
 
 #### Observations
 
-_To be added_
+- `dig doubleclick.net @127.0.0.1` returned `0.0.0.0`.
+- The log showed `gravity blocked doubleclick.net is 0.0.0.0`. "Gravity" is Pi-hole's database of domains from its downloaded blocklists.
+- Pi-hole blocks by answering with `0.0.0.0`, an address that goes nowhere, so the ad never loads.
 
 **Screenshot 12**
 
@@ -357,7 +361,9 @@ Added `example.com` as a deny entry under **Domains**, tested it, then removed i
 
 #### Observations
 
-_To be added_
+- At first, I added `example.com` under **Lists** by mistake. Lists are for blocklist files (URLs), so Pi-hole tried to download it as a list and failed. I removed it, added it under **Domains** as an exact deny entry, and ran `pihole -g` to rebuild the blocklist database.
+- After that, the log showed `exactly denied example.com is 0.0.0.0`. Pi-hole's log names which rule blocked each domain.
+- After removing the deny entry, `example.com` resolved normally again.
 
 **Screenshot 13**
 
@@ -365,7 +371,11 @@ _To be added_
 
 ### What was learned
 
-_To be added_
+- When I'm away from home, my laptop uses the DNS server of whatever network it's on, not Pi-hole. To test Pi-hole remotely, I sent queries from homelab01 itself with `dig <domain> @127.0.0.1`.
+- Pi-hole blocked `doubleclick.net` because it's on one of its downloaded blocklists. It answered with `0.0.0.0`, so the ad never loads.
+- To block a single domain myself, it has to be added under **Domains**, not **Lists**. Lists are for blocklist files that Pi-hole downloads.
+- After adding `example.com` as a deny entry, Pi-hole blocked it. After removing the entry, it resolved normally again.
+- Pi-hole's log shows why each domain was blocked: "gravity blocked" for blocklists, "exactly denied" for my own entries.
 
 ---
 
