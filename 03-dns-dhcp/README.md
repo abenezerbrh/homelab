@@ -381,27 +381,122 @@ Added `example.com` as a deny entry under **Domains**, tested it, then removed i
 
 # Part B: DHCP
 
+## 11. Lab Design
+
+The DHCP lab runs entirely inside Containerlab, isolated from my home network, so a DHCP server can't hand out addresses to anyone else's devices.
+
+**Screenshot 14**
+
+![Screenshot 14](screenshots/14.png)
+
+### Addressing
+
+| Device | Interface | IP address | Role |
+|---|---|---|---|
+| dhcp1 | eth1 | 10.20.0.10/24 | DHCP server (dnsmasq) |
+| r1 | eth1 | 10.20.0.1/24 | Router, server side |
+| r1 | eth2 | 10.30.0.1/24 | Router, client side, DHCP relay |
+| sw1 | eth1 to eth4 | none | Switch connecting r1 and the clients |
+| c1, c2, c3 | eth1 | from DHCP | Clients |
+
+- **Server network:** 10.20.0.0/24
+- **Client network:** 10.30.0.0/24, with a DHCP pool of 10.30.0.100 to 10.30.0.150
+
+### Why a relay is needed
+
+The clients and the DHCP server are on different networks. A DHCP Discover is a broadcast, and routers don't forward broadcasts, so without help the server never hears the clients.
+
+The DHCP relay on r1 catches the broadcast and forwards it to the server as a normal packet. It also adds its own client-side address (10.30.0.1) to the request in a field called **giaddr** (gateway IP address). The server uses giaddr to know which network the client is on, and which pool to hand out an address from.
+
+This is the Linux equivalent of Cisco's `ip helper-address`.
+
+---
+
+## 12. Checking the Tools
+
+### Command
+
+```bash
+sudo docker run --rm nicolaka/netshoot:v0.13 sh -c "which udhcpc dnsmasq; ls /usr/share/udhcpc/"
+```
+
+### Observations
+
 _To be added_
 
 ---
 
-## Problems Encountered
+## 13. Deploying the Lab Without a Relay
+
+### Commands
 
 _To be added_
 
----
-
-## Break and Fix Tests
+### Prediction
 
 _To be added_
 
----
-
-## Key Concepts Learned
+### Observations
 
 _To be added_
 
+**Screenshot 15**
+
+![Screenshot 15](screenshots/15.png)
+
 ---
+
+## 14. Enabling the DHCP Relay
+
+### Commands
+
+_To be added_
+
+### Observations
+
+_To be added_
+
+**Screenshot 16**
+
+![Screenshot 16](screenshots/16.png)
+
+---
+
+## 15. Capturing the Relayed DHCP Exchange
+
+### Commands
+
+_To be added_
+
+### Observations
+
+_To be added_
+
+**Screenshot 17**
+
+![Screenshot 17](screenshots/17.png)
+
+---
+
+## 16. DHCP Reservations
+
+### Commands
+
+_To be added_
+
+### Observations
+
+_To be added_
+
+**Screenshot 18**
+
+![Screenshot 18](screenshots/18.png)
+
+---
+
+### What was learned (Part B)
+
+_To be added_
 
 ## Commands Reference
 
