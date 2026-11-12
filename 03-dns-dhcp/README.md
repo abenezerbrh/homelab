@@ -422,23 +422,26 @@ sudo docker run --rm nicolaka/netshoot:v0.13 sh -c "which udhcpc dnsmasq; ls /us
 
 ### Observations
 
-_To be added_
+- `udhcpc`, a lightweight DHCP client, was already installed at `/sbin/udhcpc`.
+- Its helper script, `default.script`, was in `/usr/share/udhcpc/`. `udhcpc` uses this script to actually apply the address, gateway, and other settings it receives. Without it, a client would get a lease but never configure its interface.
+- `dnsmasq` was not installed (`which` printed nothing for it). Since dhcp1 needs it as the DHCP server and r1 needs it as the relay, the topology file installs it with `apk add --no-cache dnsmasq` when the lab starts. That runs before each container's default route is removed, since it needs internet access.
+- `--rm` deleted the test container as soon as the check finished.
 
 ---
 
 ## 13. Deploying the Lab Without a Relay
 
-### Commands
-
-_To be added_
-
 ### Prediction
 
-_To be added_
+c1 would not get an address. Its DHCP Discover is a broadcast, and r1 won't forward broadcasts to the server network.
 
 ### Observations
 
-_To be added_
+- dnsmasq was running on dhcp1, serving the range 10.30.0.100 to 10.30.0.150 with a 1-hour lease.
+- c1 broadcast a DHCP Discover three times, then gave up with "no lease."
+- dhcp1's log only showed its startup messages. It never received c1's requests.
+
+The broadcasts stopped at r1. Routers separate broadcast domains, so the DHCP server on the other network never heard them.
 
 **Screenshot 15**
 
@@ -448,13 +451,21 @@ _To be added_
 
 ## 14. Enabling the DHCP Relay
 
-### Commands
+### Prediction
 
-_To be added_
+With the relay running on r1, c1's request would be forwarded to dhcp1, and c1 would get an address from the 10.30.0.100 to 10.30.0.150 pool.
 
 ### Observations
 
-_To be added_
+- After starting the relay, c1 got the address 10.30.0.119 from the server at 10.20.0.10, with a lease time of 3600 seconds (1 hour).
+- `udhcpc` calls the Request step "select." c1 sent two Discovers before getting an offer. The first was likely sent while the relay was still starting.
+- dnsmasq doesn't hand out addresses in order. It picks one based on the client's MAC address, so the same client tends to get the same address.
+- `ip addr` and `ip route` confirmed c1 applied both the address (10.30.0.119/24) and the default gateway (10.30.0.1) it received through DHCP.
+- `ping 10.20.0.10` from c1 worked with `ttl=63`, showing c1 could use its new address and gateway to reach a device across r1.
+- The server's log showed the full exchange: `DHCPDISCOVER`, `DHCPOFFER`, `DHCPREQUEST`, `DHCPACK`.
+- dhcp1 sits on 10.20.0.0/24 but handed out an address from the 10.30.0.0/24 pool. It knew which pool to use because the relay included its client-side address (10.30.0.1) in the request.
+- The server also sent two renewal timers: **T1 (30 minutes)**, when the client asks the same server to renew, and **T2 (52.5 minutes)**, when it asks any server if the first renewal failed.
+
 
 **Screenshot 16**
 
@@ -464,13 +475,21 @@ _To be added_
 
 ## 15. Capturing the Relayed DHCP Exchange
 
-### Commands
-
-_To be added_
-
 ### Observations
 
-_To be added_
+I captured on both sides of r1 at the same time while c2 requested an address. c2 got 10.30.0.118.
+
+| | Client side (r1 `eth2`) | Server side (r1 `eth1`) |
+|---|---|---|
+| Discover and Request | 0.0.0.0 → 255.255.255.255 (broadcast) | 10.30.0.1 → 10.20.0.10 (unicast) |
+| Offer and ACK | 10.30.0.1 → 10.30.0.118 | 10.20.0.10 → 10.30.0.1 |
+
+- The relay turned c2's broadcasts into unicast packets sent directly to the server.
+- The server replied to the relay (10.30.0.1), not to the client. That's why dhcp1 needs a route back to the client network.
+- Every packet in both captures had the same Transaction ID (`0xba6ccd40`). The relay keeps it unchanged, so the client, relay, and server can all match up the same exchange.
+- The first Offer came 3 seconds after the first Discover. Before offering an address, dnsmasq pings it to make sure no other device is already using it, and waits for a reply. c2 timed out and sent a second Discover in the meantime.
+- In the server-side packets, the **Relay agent IP address** (giaddr) was 10.30.0.1 and **Hops** was 1. On the client side, giaddr was 0.0.0.0 and Hops was 0.
+- The relay is what adds giaddr and increases Hops. The server uses giaddr to know which network the client is on, so it can pick the right pool, and to know where to send its reply.
 
 **Screenshot 17**
 
@@ -480,30 +499,152 @@ _To be added_
 
 ## 16. DHCP Reservations
 
+A reservation tells the DHCP server to always give a specific device the same address, identified by its MAC address. It's how devices like printers and servers keep a fixed IP while still getting it through DHCP.
+
 ### Commands
 
-_To be added_
+Got c1's MAC address, then restarted dnsmasq on dhcp1 with a reservation added:
+
+```bash
+sudo docker exec clab-dhcp-c1 ip link show eth1
+sudo docker exec clab-dhcp-dhcp1 pkill dnsmasq
+sudo docker exec clab-dhcp-dhcp1 dnsmasq ... --dhcp-host=<C1-MAC>,10.30.0.50 ...
+```
+
+Then had c1 drop its address and request a new one, twice:
+
+```bash
+sudo docker exec clab-dhcp-c1 ip addr flush dev eth1
+sudo docker exec clab-dhcp-c1 udhcpc -i eth1 -n -q -t 3
+```
+
+### Prediction
+
+c1 would get 10.30.0.50 instead of an address from the pool.
 
 ### Observations
 
-_To be added_
+- c1 got 10.30.0.50 both times, the reserved address.
+- I reserved an address outside the dynamic pool (.100 to .150), so reserved addresses can never clash with the ones handed out to other clients.
+- Only one Discover was needed this time. The 3-second ping check from earlier was most likely skipped, since the server already knows which device the reserved address belongs to.
+- c3, which has no reservation, got 10.30.0.116 from the pool. When it asked again, it got the same address with only one Discover, because the server already had an active lease for its MAC.
+- The lease file listed all three clients: c1 at its reserved 10.30.0.50, c2 at 10.30.0.118, and c3 at 10.30.0.116. c1's old lease for .119 was removed once it took its reserved address.
+- Each lease line shows the expiry time (as a Unix timestamp), the MAC address, the IP, the hostname (`*` when the client doesn't send one), and the client ID.
+
 
 **Screenshot 18**
 
 ![Screenshot 18](screenshots/18.png)
 
+### Limitation
+
+Containerlab gives containers new MAC addresses each time the lab is rebuilt, so this reservation stops matching after a redeploy. On a real network, a device's MAC stays the same, which is why reservations work reliably there.
+
 ---
 
 ### What was learned (Part B)
 
-_To be added_
+- **Routers block broadcasts.** Without a relay, c1's DHCP Discovers never reached the server on the other network.
+- **A DHCP relay turns broadcasts into unicast.** r1 caught the client's broadcast and forwarded it directly to the server, then passed the server's reply back to the client.
+- **giaddr tells the server where the client is.** The relay filled in its client-side address (10.30.0.1) and raised Hops from 0 to 1. The server used giaddr to pick the right pool and to know where to send its reply.
+- **The server replies to the relay, not the client,** so it needs a route back to the client network.
+- **The Transaction ID stays the same** across the whole exchange, on both sides of the relay, which ties the client, relay, and server conversations together.
+- **dnsmasq pings an address before offering it,** to make sure no one else is using it. That caused a 3-second delay and a second Discover from new clients.
+- **DHCP gives more than an IP.** Clients also got their subnet mask, default gateway, and renewal timers (T1 at half the lease, T2 at 87.5%).
+- **Reservations tie an address to a MAC address.** c1 always got 10.30.0.50, while clients without a reservation got pool addresses. Clients without one still tend to keep the same address while their lease is active.
 
 ## Commands Reference
 
-_To be added_
+### Part A: DNS
+
+**On homelab01:**
+
+```bash
+# Pi-hole
+pihole status
+pihole -v
+pihole -t                                        # watch queries live
+pihole -q <domain>                               # check if a domain is on a list
+pihole -g                                        # rebuild the blocklist database
+sudo pihole-FTL --config dns.upstreams           # show upstream DNS servers
+
+# Unbound
+sudo apt install unbound
+sudo nano /etc/unbound/unbound.conf.d/pi-hole.conf
+systemctl is-enabled unbound-resolvconf
+sudo systemctl disable --now unbound-resolvconf
+sudo systemctl restart unbound
+systemctl status unbound --no-pager
+
+# Testing
+dig <domain> @127.0.0.1 -p 5335                  # ask Unbound directly
+dig <domain> @127.0.0.1                          # ask Pi-hole directly
+dig <domain>                                     # ask homelab01's own DNS (the router)
+dig fail01.dnssec.works @127.0.0.1 -p 5335       # DNSSEC test, should SERVFAIL
+
+# Capturing recursive resolution
+sudo tcpdump -i wlp2s0 -nn -w recursion.pcap port 53 and not host 192.168.1.254 and not host 192.168.1.86
+```
+
+**On the Windows laptop:**
+
+```powershell
+nslookup <domain>                                # ask the laptop's DNS server
+nslookup <domain> 192.168.1.78                   # ask Pi-hole directly
+Get-DnsClientServerAddress -AddressFamily IPv4   # show the laptop's DNS servers
+```
+
+### Part B: DHCP
+
+**On homelab01:**
+
+```bash
+# Lab
+sudo containerlab deploy -t topology.clab.yml
+sudo containerlab destroy -t topology.clab.yml
+
+# DHCP server (dhcp1)
+sudo docker exec clab-dhcp-dhcp1 ps aux | grep dnsmasq
+sudo docker exec clab-dhcp-dhcp1 cat /tmp/dnsmasq.log
+sudo docker exec clab-dhcp-dhcp1 cat /tmp/dnsmasq.leases
+sudo docker exec clab-dhcp-dhcp1 pkill dnsmasq
+
+# DHCP relay (r1)
+sudo docker exec clab-dhcp-r1 dnsmasq --conf-file=/dev/null --port=0 --dhcp-relay=10.30.0.1,10.20.0.10 --log-dhcp --log-facility=/tmp/relay.log
+
+# Clients
+sudo docker exec clab-dhcp-<client> udhcpc -i eth1 -n -q -t 3
+sudo docker exec clab-dhcp-<client> ip addr flush dev eth1
+sudo docker exec clab-dhcp-<client> ip -br -4 addr show eth1
+sudo docker exec clab-dhcp-<client> ip route
+sudo docker exec clab-dhcp-<client> ip link show eth1
+
+# Capturing on both sides of the relay
+sudo docker exec -d clab-dhcp-r1 tcpdump -i eth2 -nn -w /tmp/client-side.pcap port 67 or port 68
+sudo docker exec -d clab-dhcp-r1 tcpdump -i eth1 -nn -w /tmp/server-side.pcap port 67 or port 68
+sudo docker exec clab-dhcp-r1 pkill tcpdump
+sudo docker cp clab-dhcp-r1:/tmp/client-side.pcap ~/
+```
+
+**On the Windows laptop:**
+
+```powershell
+scp abenezerbrh@192.168.1.78:~/<file>.pcap .
+```
 
 ---
 
 ## Project Outcome
 
-_To be added_
+By the end of the project, I could:
+
+- Run my own recursive DNS resolver (Unbound) behind Pi-hole, instead of relying on a public DNS provider
+- Validate DNS answers with DNSSEC, and show it rejecting tampered records
+- Trace a DNS lookup step by step, from the root servers down to a domain's own server
+- Create local DNS names for my devices, and explain why they only work for clients that use Pi-hole
+- Read Pi-hole's query log and block domains, both through blocklists and manually
+- Build an isolated DHCP lab with a server, a relay, a switch, and multiple clients
+- Explain why DHCP needs a relay across routers, and show the giaddr and Hops fields the relay adds
+- Set up DHCP reservations so a device always gets the same address
+
+The biggest lesson was how much both services depend on **which server a client is actually asking**. My local DNS names failed on my laptop because it was quietly using the router instead of Pi-hole, and DHCP requests never reached the server until a relay carried them across the router. Most DNS and DHCP problems come down to the same question: where is the request really going?

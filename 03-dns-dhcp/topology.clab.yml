@@ -1,0 +1,63 @@
+# Project 3, Part B - DHCP server and relay
+#
+# dhcp1 --- r1 --- sw1 --- c1
+#                     \--- c2
+#                     \--- c3
+#
+# Server network: 10.20.0.0/24
+# Client network: 10.30.0.0/24 (DHCP pool 10.30.0.100 - 10.30.0.150)
+#
+# The DHCP relay on r1 is NOT started here. It is started by hand during the lab.
+
+name: dhcp
+
+topology:
+  defaults:
+    kind: linux
+    image: nicolaka/netshoot:v0.13
+
+  nodes:
+    dhcp1:
+      exec:
+        - apk add --no-cache dnsmasq                 # install DHCP server (needs internet, so before removing the default route)
+        - ip addr add 10.20.0.10/24 dev eth1
+        - ip route del default                       # remove Docker's management route
+        - ip route add 10.30.0.0/24 via 10.20.0.1    # route back to the client network through r1
+        - dnsmasq --conf-file=/dev/null --port=0 --interface=eth1 --dhcp-range=10.30.0.100,10.30.0.150,255.255.255.0,1h --dhcp-option=option:router,10.30.0.1 --dhcp-leasefile=/tmp/dnsmasq.leases --log-dhcp --log-facility=/tmp/dnsmasq.log
+
+    r1:
+      sysctls:
+        net.ipv4.ip_forward: "1"
+      exec:
+        - apk add --no-cache dnsmasq                 # used later as the DHCP relay
+        - ip addr add 10.20.0.1/24 dev eth1          # server side
+        - ip addr add 10.30.0.1/24 dev eth2          # client side
+        - ip route del default
+
+    sw1:
+      exec:
+        - ip link add br0 type bridge                # turn the container into a switch
+        - ip link set br0 up
+        - ip link set eth1 master br0
+        - ip link set eth2 master br0
+        - ip link set eth3 master br0
+        - ip link set eth4 master br0
+
+    c1:
+      exec:
+        - ip route del default                       # clients start with no lab address and no default route
+
+    c2:
+      exec:
+        - ip route del default
+
+    c3:
+      exec:
+        - ip route del default
+
+  links:
+    - endpoints: ["dhcp1:eth1", "r1:eth1"]
+    - endpoints: ["r1:eth2", "sw1:eth1"]
+    - endpoints: ["sw1:eth2", "c1:eth1"]
+    - endpoints: ["sw1:eth3", "c2:eth1"]
+    - endpoints: ["sw1:eth4", "c3:eth1"]
