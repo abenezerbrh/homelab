@@ -12,7 +12,7 @@ I'm a Software Engineering student learning networking by building, capturing, a
 |---|---|---|---|
 | 1 | [Network Discovery & Documentation](01-network-discovery/) | IP addressing, DHCP, ARP, DNS, packet capture, break/fix testing | Complete |
 | 2 | [Build a Small Routed Network](02-routed-network/) | Routing, static routes, failure testing | Complete |
-| 3 | Homelab DNS + DHCP Server | Pi-hole, DHCP, internal records, logging | Complete |
+| 3 | [Homelab DNS + DHCP Server](03-dns-dhcp/) | Pi-hole, DHCP, internal records, logging | Complete |
 | 4 | VLAN Segmented Network | 802.1Q VLANs, trunks, inter-VLAN routing, ACLs | In Progress |
 | 5 | Network Monitoring System | SNMP, Prometheus, Grafana | Planned |
 | 6 | VPN Remote Access Lab | WireGuard, split/full tunnels, firewall segmentation | Planned |
