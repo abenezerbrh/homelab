@@ -1,0 +1,64 @@
+
+\# Project 4 - VLAN segmented network
+#
+#            r1 (router, trunk to sw1)
+#             |
+#            sw1 (VLAN-aware switch)
+#     /      |       |       \
+#  user1   user2   srv1    guest1
+#  VLAN10  VLAN10  VLAN20  VLAN30
+#
+# This file only builds the starting point: host IPs, a VLAN-aware bridge with
+# every port still in the default VLAN 1, and r1 with no subinterfaces yet.
+# VLANs, the trunk, and r1's subinterfaces are configured by hand during the lab.
+
+name: vlan
+
+topology:
+  defaults:
+    kind: linux
+    image: nicolaka/netshoot:v0.13
+
+  nodes:
+    r1:
+      sysctls:
+        net.ipv4.ip_forward: "1"
+      exec:
+        - ip route del default                       # remove Docker's management route
+
+    sw1:
+      exec:
+        - ip link add br0 type bridge vlan_filtering 1   # VLAN-aware switch
+        - ip link set br0 up
+        - ip link set eth1 master br0                # to r1 (becomes the trunk)
+        - ip link set eth2 master br0                # to user1
+        - ip link set eth3 master br0                # to user2
+        - ip link set eth4 master br0                # to srv1
+        - ip link set eth5 master br0                # to guest1
+
+    user1:
+      exec:
+        - ip addr add 10.10.10.11/24 dev eth1
+        - ip route replace default via 10.10.10.1 dev eth1
+
+    user2:
+      exec:
+        - ip addr add 10.10.10.12/24 dev eth1
+        - ip route replace default via 10.10.10.1 dev eth1
+
+    srv1:
+      exec:
+        - ip addr add 10.10.20.10/24 dev eth1
+        - ip route replace default via 10.10.20.1 dev eth1
+
+    guest1:
+      exec:
+        - ip addr add 10.10.30.10/24 dev eth1
+        - ip route replace default via 10.10.30.1 dev eth1
+
+  links:
+    - endpoints: ["r1:eth1", "sw1:eth1"]
+    - endpoints: ["sw1:eth2", "user1:eth1"]
+    - endpoints: ["sw1:eth3", "user2:eth1"]
+    - endpoints: ["sw1:eth4", "srv1:eth1"]
+    - endpoints: ["sw1:eth5", "guest1:eth1"]
