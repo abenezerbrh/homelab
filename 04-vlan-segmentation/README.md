@@ -131,15 +131,32 @@ Different IP subnets don't separate devices at Layer 2. With every port in VLAN 
 
 ### Commands
 
-_To be added_
+Made each host port an access port in its VLAN, then removed it from the default VLAN 1:
+
+```bash
+d="sudo docker exec clab-vlan-sw1"
+$d bridge vlan add dev eth2 vid 10 pvid untagged
+$d bridge vlan add dev eth3 vid 10 pvid untagged
+$d bridge vlan add dev eth4 vid 20 pvid untagged
+$d bridge vlan add dev eth5 vid 30 pvid untagged
+for p in eth2 eth3 eth4 eth5; do $d bridge vlan del dev $p vid 1; done
+```
+
+```bash
+sudo docker exec clab-vlan-sw1 bridge vlan show
+```
 
 ### Observations
 
-_To be added_
+- eth2 and eth3 (user1, user2) showed VLAN 10, eth4 (srv1) showed VLAN 20, and eth5 (guest1) showed VLAN 30.
+- Each was marked `PVID Egress Untagged`:
+  - **PVID:** untagged frames arriving from the host are placed in that VLAN.
+  - **Egress Untagged:** the VLAN tag is removed before frames leave toward the host, so hosts never see VLAN tags.
+- eth1 (the link to r1) was still only in VLAN 1. It becomes the trunk in section 6.
 
 **Screenshot 4**
 
-![Screenshot 4](screenshots/03.png)
+![Screenshot 4](screenshots/04.png)
 
 ---
 
@@ -147,17 +164,22 @@ _To be added_
 
 ### Prediction
 
-_To be added_
+guest1 would no longer receive user1's ARP broadcast, since it's now in a different VLAN. user2 would still receive it, since it shares VLAN 10 with user1.
 
 ### Observations
 
-_To be added_
+- I repeated the broadcast test: user1 pinged 10.10.10.99, an address that doesn't exist, while tcpdump listened on both user2 and guest1.
+- **user2 (VLAN 10)** received the ARP request `who-has 10.10.10.99 tell 10.10.10.11`.
+- **guest1 (VLAN 30)** received nothing. Before the VLANs were set up (section 3), it heard the same broadcast.
+- user1 sent 2 pings, but user2 saw 3 ARP requests. When nobody answers, Linux retries the ARP request a few times before giving up.
 
 **Screenshot 5**
 
-![Screenshot 5](screenshots/04.png)
+![Screenshot 5](screenshots/05.png)
 
----
+### What was learned
+
+VLANs split one switch into separate broadcast domains. user2 and guest1 are plugged into the same switch, but only devices in the same VLAN as user1 heard its broadcast. The separation now happens at Layer 2, in the switch itself, not just through different IP subnets.
 
 ## 6. Setting Up the Trunk and Router Subinterfaces
 
@@ -171,7 +193,7 @@ _To be added_
 
 **Screenshot 6**
 
-![Screenshot 6](screenshots/05.png)
+![Screenshot 6](screenshots/06.png)
 
 ---
 
@@ -187,7 +209,7 @@ _To be added_
 
 **Screenshot 7**
 
-![Screenshot 7](screenshots/06.png)
+![Screenshot 7](screenshots/07.png)
 
 ---
 
@@ -203,4 +225,4 @@ _To be added_
 
 **Screenshot 8**
 
-![Screenshot 8](screenshots/07.png)
+![Screenshot 8](screenshots/08.png)
