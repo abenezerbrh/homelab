@@ -89,17 +89,43 @@ _To be added_
 
 ### Commands
 
-_To be added_
+```bash
+cd ~/labs/04-vlan-segmentation && sudo containerlab deploy -t topology.clab.yml
+```
+
+```bash
+for n in user1 user2 srv1 guest1; do echo "== $n"; sudo docker exec clab-vlan-$n ip -br -4 addr show eth1; done
+```
+
+```bash
+sudo docker exec clab-vlan-sw1 bridge vlan show
+```
+
+Broadcast test (tcpdump on guest1 in one window, the ping from user1 in another):
+
+```bash
+sudo docker exec -it clab-vlan-guest1 tcpdump -lni eth1 arp
+sudo docker exec clab-vlan-user1 ping -c 2 10.10.10.99
+```
 
 ### Observations
 
-_To be added_
+- Each host's `eth1` had the IP address from the lab plan.
+- `bridge vlan show` listed every switch port (eth1 to eth5) as `1 PVID Egress Untagged`. All ports were in the default VLAN 1, so the switch behaved like a plain, unmanaged switch.
+- I pinged 10.10.10.99, an address that doesn't exist. user1 broadcast an ARP request asking who has it, got no answer, and reported "Destination Host Unreachable."
+- guest1, which is on a different subnet (10.10.30.0/24), still received the ARP request: `who-has 10.10.10.99 tell 10.10.10.11`.
 
 **Screenshot 2**
 
 ![Screenshot 2](screenshots/02.png)
 
----
+**Screenshot 3**
+
+![Screenshot 3](screenshots/03.png)
+
+### What was learned
+
+Different IP subnets don't separate devices at Layer 2. With every port in VLAN 1, all hosts shared one broadcast domain, so guest1 could hear broadcasts from the Users network. A guest could also change its IP into the Users subnet and talk to staff devices directly. VLANs fix this by separating the network at the switch itself.                                                                                               
 
 ## 4. Configuring VLANs on the Switch
 
@@ -111,9 +137,9 @@ _To be added_
 
 _To be added_
 
-**Screenshot 3**
+**Screenshot 4**
 
-![Screenshot 3](screenshots/03.png)
+![Screenshot 4](screenshots/03.png)
 
 ---
 
@@ -127,9 +153,9 @@ _To be added_
 
 _To be added_
 
-**Screenshot 4**
+**Screenshot 5**
 
-![Screenshot 4](screenshots/04.png)
+![Screenshot 5](screenshots/04.png)
 
 ---
 
@@ -143,9 +169,9 @@ _To be added_
 
 _To be added_
 
-**Screenshot 5**
+**Screenshot 6**
 
-![Screenshot 5](screenshots/05.png)
+![Screenshot 6](screenshots/05.png)
 
 ---
 
@@ -159,9 +185,9 @@ _To be added_
 
 _To be added_
 
-**Screenshot 6**
+**Screenshot 7**
 
-![Screenshot 6](screenshots/06.png)
+![Screenshot 7](screenshots/06.png)
 
 ---
 
@@ -175,6 +201,6 @@ _To be added_
 
 _To be added_
 
-**Screenshot 7**
+**Screenshot 8**
 
-![Screenshot 7](screenshots/07.png)
+![Screenshot 8](screenshots/07.png)
