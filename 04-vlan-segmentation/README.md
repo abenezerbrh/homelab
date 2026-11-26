@@ -185,11 +185,36 @@ VLANs split one switch into separate broadcast domains. user2 and guest1 are plu
 
 ### Commands
 
-_To be added_
+Added VLANs 10, 20 and 30 to sw1's link to r1 as **tagged** VLANs, turning it into a trunk:
+
+```bash
+for v in 10 20 30; do sudo docker exec clab-vlan-sw1 bridge vlan add dev eth1 vid $v; done
+```
+
+Created a subinterface on r1 for each VLAN, gave it that VLAN's gateway address, and brought it up:
+
+```bash
+r="sudo docker exec clab-vlan-r1"
+for v in 10 20 30; do
+  $r ip link add link eth1 name eth1.$v type vlan id $v
+  $r ip addr add 10.10.$v.1/24 dev eth1.$v
+  $r ip link set eth1.$v up
+done
+```
+
+Checked the result:
+
+```bash
+sudo docker exec clab-vlan-r1 ip -br addr
+sudo docker exec clab-vlan-r1 ip route
+```
 
 ### Observations
 
-_To be added_
+- r1 now has three subinterfaces on top of `eth1`: `eth1.10`, `eth1.20`, and `eth1.30`, each with its VLAN's gateway address (10.10.10.1, 10.10.20.1, 10.10.30.1).
+- `eth1` itself has no IPv4 address. It only carries the tagged traffic, and each subinterface handles one VLAN.
+- The subinterfaces all share eth1's MAC address, which is why they show the same IPv6 link-local (`fe80::`) address.
+- `ip route` showed three directly connected networks, one per VLAN. Since r1 is connected to every VLAN, it can route between them without any static routes.
 
 **Screenshot 6**
 
